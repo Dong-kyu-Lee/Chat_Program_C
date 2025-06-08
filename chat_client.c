@@ -10,6 +10,25 @@
 
 #define BUFFER_SIZE 1024
 
+typedef struct PacketHeader {
+    uint8_t type;
+    uint16_t length; // Length of the data in bytes
+} PacketHeader;
+
+typedef enum PacketType {
+    TYPE_TEXT = 0,
+    TYPE_NICK = 1,
+    TYPE_ROOMS = 2,
+    TYPE_CREATE = 3,
+    TYPE_JOIN = 4,
+    TYPE_LEAVE = 5,
+    TYPE_USERS = 6,
+    TYPE_CHANGE = 7,
+    TYPE_KICK = 8,
+    TYPE_DM = 9,
+    TYPE_HELP = 10,
+} PacketType;
+
 // UI elements
 GtkWidget *ip_entry;
 GtkWidget *port_entry;
@@ -159,6 +178,13 @@ static void on_send_clicked(GtkWidget *widget, gpointer data) {
     char buffer_to_send[BUFFER_SIZE];
     snprintf(buffer_to_send, sizeof(buffer_to_send), "%s\n", message);
 
+	// packet header + message
+	PacketHeader header;
+	header.type = TYPE_TEXT; // Set packet type to text message
+	header.length = htons(strlen(buffer_to_send)); // Set length in network byte order
+	memcpy(buffer_to_send, &header, sizeof(PacketHeader)); // Copy header to the beginning of the buffer
+	
+    // Send the message to the server
     if (send(sock, buffer_to_send, strlen(buffer_to_send), 0) < 0) {
         perror("send");
         g_idle_add(append_message_to_view_idle, g_strdup("[Client] Error: Failed to send message."));

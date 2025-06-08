@@ -706,6 +706,7 @@ void *client_process(void *arg) {
         memcpy(&header, buffer, sizeof(PacketHeader));
         header.type = htons(header.type); // Convert type to host byte order (보낼 때는 htons, 받을 때에는 ntohs)
         header.length = htons(header.length); // Convert length to host byte order
+		printf("[DEBUG] Received packet type: %d, length: %d\n", header.type, header.length);
 
 		// "/" 대신 header.type를 사용하여 명령어를 처리
 
