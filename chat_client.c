@@ -176,13 +176,12 @@ static void on_send_clicked(GtkWidget *widget, gpointer data) {
     if (strlen(message) == 0) return;
 
     char buffer_to_send[BUFFER_SIZE];
-    snprintf(buffer_to_send, sizeof(buffer_to_send), "%s\n", message);
+    PacketHeader header;
+    header.type = TYPE_TEXT;
+    header.length = htons(strlen(message) + 1); // 개행 문자 포함 길이
 
-	// packet header + message
-	PacketHeader header;
-	header.type = TYPE_TEXT; // Set packet type to text message
-	header.length = htons(strlen(buffer_to_send)); // Set length in network byte order
-	memcpy(buffer_to_send, &header, sizeof(PacketHeader)); // Copy header to the beginning of the buffer
+    memcpy(buffer_to_send, &header, sizeof(PacketHeader));
+    snprintf(buffer_to_send + sizeof(PacketHeader), BUFFER_SIZE - sizeof(PacketHeader), "%s\n", message);
 	
     // Send the message to the server
     if (send(sock, buffer_to_send, strlen(buffer_to_send), 0) < 0) {
