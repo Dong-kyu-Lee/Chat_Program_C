@@ -182,9 +182,12 @@ static void on_send_clicked(GtkWidget *widget, gpointer data) {
 
     memcpy(buffer_to_send, &header, sizeof(PacketHeader));
     snprintf(buffer_to_send + sizeof(PacketHeader), BUFFER_SIZE - sizeof(PacketHeader), "%s\n", message);
+    // 패킷 길이 디버그
+    int packet_len = sizeof(PacketHeader) + strlen(message) + 1; // header + 메시지 + 개행
+    printf("[DEBUG] Packet length: %d\n", packet_len);
 	
     // Send the message to the server
-    if (send(sock, buffer_to_send, strlen(buffer_to_send), 0) < 0) {
+    if (send(sock, buffer_to_send, packet_len, 0) < 0) {
         perror("send");
         g_idle_add(append_message_to_view_idle, g_strdup("[Client] Error: Failed to send message."));
     }

@@ -699,6 +699,7 @@ void *client_process(void *arg) {
         // --> 이진 데이터 형태로 전송이 됨.
         if (bytes_received < sizeof(PacketHeader)) {
             safe_send(cli->sock, "[Server] Invalid packet received.\n");
+			printf("[Debug] Received packet too small: %zd bytes\n", bytes_received);
             continue;
         }
         // 패킷 헤더를 읽어오기
@@ -709,6 +710,27 @@ void *client_process(void *arg) {
 		printf("[DEBUG] Received packet type: %d, length: %d\n", header.type, header.length);
 
 		// "/" 대신 header.type를 사용하여 명령어를 처리
+        switch (header.type)
+        {
+		case TYPE_TEXT:
+			// Handle text message
+			if (header.length > 0 && header.length < BUFFER_SIZE) {
+				char* message = buffer + sizeof(PacketHeader);
+				message[header.length] = '\0'; // Null-terminate the message
+				if (cli->room != NULL) {
+					broadcast_room(cli->room, cli, "[%s] %s\n", cli->nick, message);
+				}
+				else {
+					safe_send(cli->sock, "[Server] You must join a room to send messages. Type /rooms or /create.\n");
+				}
+			}
+			else {
+				safe_send(cli->sock, "[Server] Invalid message length.\n");
+			}
+			break;
+        default:
+            break;
+        }
 
         if (buffer[0] == '/') {
             char *cmd_full = strdup(buffer); // strtok modifies the string, so duplicate it
