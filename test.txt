@@ -1,0 +1,79 @@
+GtkWidget* stack;
+GtkWidget* friend_tab_btn;
+GtkWidget* chat_tab_btn;
+GtkWidget* chat_tab;
+GtkWidget* friend_tab;
+
+// 친구탭 UI 생성
+GtkWidget* create_friends_tab() {
+    friend_tab = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    for (int i = 0; i < num_friends; i++) {
+        GtkWidget* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+        GtkWidget* icon = gtk_image_new_from_icon_name("avatar-default", GTK_ICON_SIZE_DIALOG);
+        GtkWidget* label = gtk_label_new(friends[i]);
+        gtk_box_pack_start(GTK_BOX(row), icon, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(row), label, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(friend_tab), row, FALSE, FALSE, 0);
+    }
+    gtk_widget_set_halign(friend_tab, GTK_ALIGN_START);
+    return friend_tab;
+}
+
+// 채팅탭 UI 생성
+GtkWidget* create_chats_tab() {
+    chat_tab = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    for (int i = 0; i < num_rooms; i++) {
+        GtkWidget* frame = gtk_frame_new(NULL);
+        GtkWidget* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+        GtkWidget* label = gtk_label_new(rooms[i]);
+        char member_str[32];
+        snprintf(member_str, sizeof(member_str), "Members: %d", members[i]);
+        GtkWidget* member_label = gtk_label_new(member_str);
+        gtk_box_pack_start(GTK_BOX(row), label, FALSE, FALSE, 0);
+        gtk_box_pack_end(GTK_BOX(row), member_label, FALSE, FALSE, 0);
+        gtk_container_add(GTK_CONTAINER(frame), row);
+        gtk_box_pack_start(GTK_BOX(chat_tab), frame, FALSE, FALSE, 0);
+    }
+    gtk_widget_set_halign(chat_tab, GTK_ALIGN_START);
+    return chat_tab;
+}
+
+// 탭 전환 콜백
+void switch_tab(GtkButton* button, gpointer user_data) {
+    if (!stack || !friend_tab_btn || !chat_tab_btn) return;
+    const char* tab = (const char*)user_data;
+    // 신호 차단
+    g_signal_handlers_block_by_func(friend_tab_btn, switch_tab, "friends");
+    g_signal_handlers_block_by_func(chat_tab_btn, switch_tab, "chats");
+
+    if (friend_tab) {
+        gtk_container_remove(GTK_CONTAINER(stack), friend_tab);
+        friend_tab = NULL; // 참조 해제
+    }
+    if (chat_tab) {
+        gtk_container_remove(GTK_CONTAINER(stack), chat_tab);
+        chat_tab = NULL; // 참조 해제
+    }
+
+    // 탭 갱신
+	if (g_strcmp0(tab, "friends") == 0 && !friend_tab) {
+		friend_tab = create_friends_tab();
+		printf("Recreate friends tab\n");
+		gtk_stack_add_named(GTK_STACK(stack), friend_tab, "friends");
+	}
+	else if (g_strcmp0(tab, "chats") == 0 && !chat_tab) {
+		chat_tab = create_chats_tab();
+		printf("Recreate chat tab\n");
+		gtk_stack_add_named(GTK_STACK(stack), chat_tab, "chats");
+	}
+
+    // 탭 전환
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), tab);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(friend_tab_btn), g_strcmp0(tab, "friends") == 0);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(chat_tab_btn), g_strcmp0(tab, "chats") == 0);
+    printf("Switch\n");
+
+    // 신호 재연결
+    g_signal_handlers_unblock_by_func(friend_tab_btn, switch_tab, "friends");
+    g_signal_handlers_unblock_by_func(chat_tab_btn, switch_tab, "chats");
+}
