@@ -7,27 +7,10 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdbool.h> // For bool type
+#include "header.h"
 
 #define BUFFER_SIZE 1024
 
-typedef struct PacketHeader {
-    uint8_t type;
-    uint16_t length; // Length of the data in bytes
-} PacketHeader;
-
-typedef enum PacketType {
-    TYPE_TEXT = 0,
-    TYPE_NICK = 1,
-    TYPE_ROOMS = 2,
-    TYPE_CREATE = 3,
-    TYPE_JOIN = 4,
-    TYPE_LEAVE = 5,
-    TYPE_USERS = 6,
-    TYPE_CHANGE = 7,
-    TYPE_KICK = 8,
-    TYPE_DM = 9,
-    TYPE_HELP = 10,
-} PacketType;
 
 // 친구 목록 예시 데이터
 const char* friends[] = { "Lilly", "Marco", "Father" };
@@ -136,17 +119,39 @@ static void on_main_window_destroy(GtkWidget* widget, gpointer data) {
     main_window = NULL;
 }
 
+// 친구 프로필 윈도우 생성 함수 예시 (실제로는 직접 구현 필요)
+void on_friend_button_clicked(GtkWidget* widget, gpointer data) {
+	const char* friend_name = (const char*)data;
+	printf("Open profile for friend: %s\n", friend_name);
+	// 친구 프로필 윈도우 생성 로직 (예: 새 창 띄우기, 친구 이름 전달 등)
+	// 예시: printf("Open profile for friend: %s\n", friend_name);
+	// 실제로는 GtkWindow를 생성하고, friend_name을 활용하는 코드 작성
+}
+
+// 채팅방 윈도우 생성 함수 예시 (실제로는 직접 구현 필요)
+void on_chat_button_clicked(GtkWidget* widget, gpointer data) {
+    const char* room_name = (const char*)data;
+	printf("Open chat room: %s\n", room_name);
+    // 채팅방 윈도우 생성 로직 (예: 새 창 띄우기, 채팅방 ID 전달 등)
+    // 예시: printf("Open chat room: %s\n", room_name);
+    // 실제로는 GtkWindow를 생성하고, room_name을 활용하는 코드 작성
+}
+
 // 친구탭 UI 생성
 GtkWidget* create_friends_tab() {
     friend_tab = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     for (int i = 0; i < num_friends; i++) {
-		printf("Creating friend tab for %s\n", friends[i]);
-        GtkWidget* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+        GtkWidget* button = gtk_button_new();
+        GtkWidget* box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
         GtkWidget* icon = gtk_image_new_from_icon_name("avatar-default", GTK_ICON_SIZE_DIALOG);
         GtkWidget* label = gtk_label_new(friends[i]);
-        gtk_box_pack_start(GTK_BOX(row), icon, FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(row), label, FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(friend_tab), row, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(box), icon, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
+        gtk_container_add(GTK_CONTAINER(button), box);
+        gtk_box_pack_start(GTK_BOX(friend_tab), button, FALSE, FALSE, 0);
+
+		// 버튼 클릭 시 친구 프로필 윈도우 생성 함수 호출
+		g_signal_connect(button, "clicked", G_CALLBACK(on_friend_button_clicked), friends[i]);
     }
     gtk_widget_set_halign(friend_tab, GTK_ALIGN_START);
     return friend_tab;
@@ -156,17 +161,19 @@ GtkWidget* create_friends_tab() {
 GtkWidget* create_chats_tab() {
     chat_tab = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     for (int i = 0; i < num_rooms; i++) {
-		printf("Creating chat tab for %s with %d members\n", rooms[i], members[i]);
-        GtkWidget* frame = gtk_frame_new(NULL);
-        GtkWidget* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+        GtkWidget* button = gtk_button_new();
+        GtkWidget* box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
         GtkWidget* label = gtk_label_new(rooms[i]);
         char member_str[32];
         snprintf(member_str, sizeof(member_str), "Members: %d", members[i]);
         GtkWidget* member_label = gtk_label_new(member_str);
-        gtk_box_pack_start(GTK_BOX(row), label, FALSE, FALSE, 0);
-        gtk_box_pack_end(GTK_BOX(row), member_label, FALSE, FALSE, 0);
-        gtk_container_add(GTK_CONTAINER(frame), row);
-        gtk_box_pack_start(GTK_BOX(chat_tab), frame, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(box), member_label, FALSE, FALSE, 0);
+        gtk_container_add(GTK_CONTAINER(button), box);
+        gtk_box_pack_start(GTK_BOX(chat_tab), button, FALSE, FALSE, 0);
+
+        // 버튼 클릭 시 채팅방 윈도우 생성 함수 호출
+        g_signal_connect(button, "clicked", G_CALLBACK(on_chat_button_clicked), rooms[i]);
     }
     gtk_widget_set_halign(chat_tab, GTK_ALIGN_START);
     return chat_tab;
@@ -268,17 +275,13 @@ static void on_enter_button_clicked(GtkWidget *widget, gpointer data) {
         g_signal_connect(friend_tab_btn, "clicked", G_CALLBACK(switch_tab), "friends");
         g_signal_connect(chat_tab_btn, "clicked", G_CALLBACK(switch_tab), "chats");
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(friend_tab_btn), TRUE);
-        /*main_window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-        gtk_window_set_title(GTK_WINDOW(main_window), "Main Window");
-        gtk_window_set_default_size(GTK_WINDOW(main_window), 400, 300);
-        g_signal_connect(main_window, "destroy", G_CALLBACK(on_main_window_destroy), NULL);
-        gtk_widget_set_sensitive(connect_button, FALSE);*/
         gtk_widget_show_all(main_window);
     }
     else {
         // 이미 열려 있다면 포커스만 줍니다 (선택적)
         gtk_window_present(GTK_WINDOW(main_window));
     }
+
     /*if (sock != -1) {
         g_idle_add(append_message_to_view_idle, g_strdup("[Client] Already connected or attempting to connect."));
         return;
