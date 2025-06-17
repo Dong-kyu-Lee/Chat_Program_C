@@ -16,9 +16,9 @@ char* friends[20];
 int num_friends = 0;
 
 // 채팅방 목록 예시 데이터
-const char* rooms[] = { "Room Name", "Room Name 1", "Room Name 2" };
-const int members[] = { 4, 2, 5 };
-const int num_rooms = 3;
+char* rooms[20];
+int members[20];
+int num_rooms = 0;
 
 // 전역 위젯 포인터 (탭 전환용)
 GtkWidget* stack;
@@ -225,9 +225,7 @@ void on_friend_button_clicked(GtkWidget* widget, gpointer data) {
 void on_chat_button_clicked(GtkWidget* widget, gpointer data) {
     const char* room_name = (const char*)data;
 	printf("Open chat room: %s\n", room_name);
-    // 채팅방 윈도우 생성 로직 (예: 새 창 띄우기, 채팅방 ID 전달 등)
-    // 예시: printf("Open chat room: %s\n", room_name);
-    // 실제로는 GtkWindow를 생성하고, room_name을 활용하는 코드 작성
+	send_message(TYPE_JOIN, room_name); // 서버에 채팅방 참여 요청
 }
 
 // 친구탭 UI 생성
@@ -389,6 +387,7 @@ void on_tab_button_clicked(GtkButton* button, gpointer user_data) {
 
 // Exit 버튼 콜백
 void on_exit_clicked(GtkButton* button, gpointer user_data) {
+	send_message(TYPE_LEAVE, ""); // 서버에 방 나가기 요청
     GtkWidget* window = GTK_WIDGET(user_data);
     gtk_widget_destroy(window);
 }
@@ -489,6 +488,44 @@ void cmd_create_room(const char* room_name) {
 	g_idle_add(create_room_idle, g_strdup(room_name));
 }
 
+// 서버로부터 room 정보를 받음
+void cmd_rooms(char* message) {
+    num_rooms = 0;
+
+	// 첫 줄("Rooms:")은 무시하고, 이후 줄을 방 이름과 멤버 수로 저장
+	// 방 이름과 멤버 수는 공백으로 구분
+    char* line = strtok(message, "\n");
+    if (line && strcmp(line, "Rooms:") == 0) {
+        line = strtok(NULL, "\n"); // 첫 방 정보로 이동
+        while (line != NULL && num_rooms < 20) {
+            // 한 줄에서 방 이름과 멤버 수 분리 (strtok 사용 X)
+            char room_name[128];
+            int member_count;
+            if (sscanf(line, "%127s %d", room_name, &member_count) == 2) {
+                rooms[num_rooms] = strdup(room_name);
+                members[num_rooms] = member_count;
+                num_rooms++;
+                printf("[DEBUG] Room %d: %s (Members: %d)\n", num_rooms - 1, rooms[num_rooms - 1], members[num_rooms - 1]);
+            }
+            else {
+                printf("[ERROR] Invalid room format: %s\n", line);
+            }
+            line = strtok(NULL, "\n"); // 다음 줄로 이동
+        }
+    }
+
+    // 이후 사용 예시
+	for (int i = 0; i < num_rooms; i++) {
+		printf("%d: %s (Members: %d)\n", i, rooms[i], members[i]);
+	}
+}
+
+void cmd_join_room(const char* room_name) {
+	printf("[DEBUG] cmd_join_room called with room_name: %s\n", room_name);
+	// 채팅방 참여 완료 후 UI 업데이트
+	g_idle_add(create_room_idle, g_strdup(room_name));
+}
+
 // Thread function to receive messages from the server
 static void* receive_messages(void* arg) {
     char buffer[BUFFER_SIZE];
@@ -541,11 +578,13 @@ static void* receive_messages(void* arg) {
         case TYPE_NICK:
             break;
         case TYPE_ROOMS:
+			cmd_rooms(message_start); // 채팅방 목록 요청에 대한 서버의 응답 처리
             break;
         case TYPE_CREATE:
 			cmd_create_room(message_start); // 채팅방 생성 요청에 대한 서버의 응답 처리
             break;
 		case TYPE_JOIN:
+			cmd_join_room(message_start); // 채팅방 참여 요청에 대한 서버의 응답 처리
             break;
 		case TYPE_LEAVE:
 			break;

@@ -487,38 +487,18 @@ void cmd_change(Client* cli, const char* room_name) {
 }
 
 void cmd_rooms(int sock) {
-    char room_list[BUFFER_SIZE];
-    room_list[0] = '\0';
-    strcat(room_list, "[Server] Available rooms: ");
-
     pthread_mutex_lock(&g_rooms_mutex);
-    Room *room = g_rooms;
-    if (room == NULL) {
-        strcat(room_list, "No rooms available.\n");
-    } else {
-        while (room != NULL) {
-            // Use snprintf carefully to avoid buffer overflow
-            int remaining_len = BUFFER_SIZE - strlen(room_list) - 1;
-            if (remaining_len <= 0) { strcat(room_list, "..."); break; }
-
-            int written = snprintf(room_list + strlen(room_list), remaining_len,
-                                   "ID %u: '%s' (%d members)", room->id, room->name, room->member_count);
-            if (written < 0 || written >= remaining_len) {
-                 strcat(room_list, "..."); break;
-            }
-
-            if (room->next != NULL) {
-                remaining_len = BUFFER_SIZE - strlen(room_list) - 1;
-                if (remaining_len > strlen(", ")) {
-                    strcat(room_list, ", ");
-                } else {
-                    strcat(room_list, "..."); break;
-                }
-            }
-            room = room->next;
-        }
-        strcat(room_list, "\n");
-    }
+    char room_list[BUFFER_SIZE] = { 0 }; // 충분히 큰 버퍼를 준비
+    strcpy(room_list, "Rooms:\n");
+	printf("[DEBUG] Rooms:\n");
+	Room* current = g_rooms;
+	while (current != NULL) {
+		char room_info[BUFFER_SIZE];
+		snprintf(room_info, sizeof(room_info), "%s %d\n", current->name, current->member_count);
+		printf("[DEBUG] %s", room_info);
+		strncat(room_list, room_info, sizeof(room_list) - strlen(room_list) - 1); // 안전하게 추가
+		current = current->next;
+	}
     pthread_mutex_unlock(&g_rooms_mutex);
     safe_send(sock, room_list, TYPE_ROOMS);
 }
@@ -580,39 +560,18 @@ void cmd_create_room(Client *cli, const char *room_name) {
     safe_send(cli->sock, new_room->name, TYPE_CREATE);
 }
 
-void cmd_join_room(Client *cli, const char *room_id_str) {
-    if (!room_id_str || strlen(room_id_str) == 0) {
-        safe_send(cli->sock, "[Server] Usage: /join <room_id>\n", TYPE_ERROR);
-        return;
-    }
-    if (cli->room != NULL) {
-        safe_send(cli->sock, "[Server] You are already in a room. Please /leave first.\n", TYPE_ERROR);
-        return;
-    }
-
-    char *endptr;
-    long num_id = strtol(room_id_str, &endptr, 10);
-
-    // Validate room_id_str is a valid positive number
-    if (*endptr != '\0' || num_id <= 0 || num_id >= g_next_room_id || num_id > 0xFFFFFFFF) { // UINT_MAX approx
-        safe_send(cli->sock, "[Server] Invalid room ID. Please use a valid positive number.\n", TYPE_ERROR);
-        return;
-    }
-    unsigned int room_id_to_join = (unsigned int)num_id;
-
-    Room *target_room = find_room_by_id(room_id_to_join);
+void cmd_join_room(Client *cli, const char *name) {
+    Room* target_room = find_room(name);
     if (!target_room) {
         char error_msg[BUFFER_SIZE];
-        snprintf(error_msg, sizeof(error_msg), "[Server] Room with ID %u not found.\n", room_id_to_join);
+        snprintf(error_msg, sizeof(error_msg), "[Server] Room with name %s not found.\n", name);
         safe_send(cli->sock, error_msg, TYPE_ERROR);
         return;
     }
     room_add_member(target_room, cli);
     printf("[INFO] Client %s joined room '%s' (ID: %u).\n", cli->nick, target_room->name, target_room->id);
-    char success_msg[BUFFER_SIZE];
-    snprintf(success_msg, sizeof(success_msg), "[Server] Joined room '%s' (ID: %u).\n", target_room->name, target_room->id);
-    // 수정 필요
-    safe_send(cli->sock, success_msg, TYPE_JOIN);
+    
+    safe_send(cli->sock, name, TYPE_JOIN);
     broadcast_room(target_room, cli, "[Server] %s joined the room.\n", cli->nick);
 }
 
