@@ -1,4 +1,6 @@
-﻿#pragma once
+// header.h의 내용
+
+#pragma once
 
 #pragma pack(push, 1)
 typedef struct PacketHeader {
@@ -18,10 +20,10 @@ typedef enum PacketType {
 	TYPE_FRIENDS = 7, // Data : list of friends
     TYPE_CHANGE = 8,
     TYPE_KICK = 9, // Data : nickname of the user to kick
-    TYPE_ADD_FRIEND = 11, // Data : nickname of the user to add
-	TYPE_REMOVE_FRIEND = 12, // Data : nickname of the user to remove
-    TYPE_HELP = 13,
-	TYPE_ERROR = 14, // Data : error message string
+    TYPE_ADD_FRIEND = 10, // Data : nickname of the user to add
+	TYPE_REMOVE_FRIEND = 11, // Data : nickname of the user to remove
+    TYPE_HELP = 12,
+	TYPE_ERROR = 13, // Data : error message string
 } PacketType;
 
 typedef struct Client {

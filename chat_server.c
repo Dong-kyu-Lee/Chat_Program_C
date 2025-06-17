@@ -1,4 +1,4 @@
-#include <sys/socket.h>
+Ôªø#include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -16,13 +16,13 @@
 
 #define PORTNUM 9000
 #define BUFFER_SIZE 1024
-#define MAX_EVENTS 10
+#define MAX_EVENTS 15
 
 // Forward declarations
 typedef struct Client Client;
 typedef struct Room Room;
 void *client_process(void *arg);
-ssize_t safe_send(int sock, const char *msg);
+ssize_t safe_send(int sock, const char *msg, PacketType type);
 void broadcast_room(Room *room, Client *sender, const char *format, ...);
 void broadcast_lobby(Client *sender, const char *format, ...);
 void list_add_client_unlocked(Client *cli);
@@ -46,6 +46,45 @@ static unsigned int g_next_room_id = 1; // For assigning unique room IDs
 // Mutexes for thread-safe list access
 pthread_mutex_t g_clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t g_rooms_mutex = PTHREAD_MUTEX_INITIALIZER; // Protects global room list AND room member lists
+
+// NULL ÏÉÅÌÉúÏùò ÏπúÍµ¨ ClientÎ•º Ï∞æÏïÑ ÏπúÍµ¨ Î™©Î°ùÏóêÏÑú Ï†úÍ±∞
+void clean_friend_list(Client* cli)
+{
+    for (int i = 0; i < cli->friend_count; i++) {
+        if (cli->friend_list[i] == NULL) {
+            // Shift remaining friends down
+            for (int j = i; j < cli->friend_count - 1; j++) {
+                cli->friend_list[j] = cli->friend_list[j + 1];
+            }
+            cli->friend_list[--cli->friend_count] = NULL; // Decrease count and nullify last element
+            i--; // Stay at the same index to check the next friend
+        }
+    }
+}
+
+void list_remove_friend_unlocked(Client* cli, Client* friend_cli) {
+	for (int i = 0; i < cli->friend_count; i++) {
+		if (cli->friend_list[i] == friend_cli) {
+			// Shift remaining friends down
+			for (int j = i; j < cli->friend_count - 1; j++) {
+				cli->friend_list[j] = cli->friend_list[j + 1];
+			}
+			cli->friend_list[--cli->friend_count] = NULL; // Decrease count and nullify last element
+			return;
+		}
+	}
+	printf("[ERROR] Friend not found in list.\n");
+}
+
+void list_add_friend_unlocked(Client* cli, Client* friend_cli) {
+	if (cli->friend_count < 20) { // Assuming max 20 friends
+		cli->friend_list[cli->friend_count++] = friend_cli;
+	}
+	else {
+		printf("[ERROR] Cannot add more friends, limit reached.\n");
+	}
+    clean_friend_list(cli);
+}
 
 void list_add_client_unlocked(Client *cli) {
     if (g_clients == NULL) {
@@ -191,6 +230,18 @@ void destroy_room_if_empty_unlocked(Room *room) {
     }
 }
 
+void list_add_friend(Client* cli, Client* friend_cli) {
+	pthread_mutex_lock(&g_clients_mutex);
+	list_add_friend_unlocked(cli, friend_cli);
+	pthread_mutex_unlock(&g_clients_mutex);
+}
+
+void list_remove_friend(Client* cli, Client* friend_cli) {
+	pthread_mutex_lock(&g_clients_mutex);
+	list_remove_friend_unlocked(cli, friend_cli);
+	pthread_mutex_unlock(&g_clients_mutex);
+}
+
 void list_add_client(Client *cli) {
     pthread_mutex_lock(&g_clients_mutex);
     list_add_client_unlocked(cli);
@@ -256,14 +307,27 @@ void destroy_room_if_empty(Room *room) {
     pthread_mutex_unlock(&g_rooms_mutex);
 }
 
-ssize_t safe_send(int sock, const char *msg) {
+ssize_t safe_send(int sock, const char *msg, PacketType type) {
     if (sock < 0 || msg == NULL) return -1;
     ssize_t len = strlen(msg);
+    // Ìå®ÌÇ∑ Ìó§Îçî Î∂ÄÏ∞©
+	PacketHeader header;
+	header.type = type;
+	header.length = len + 1; // +1 for null terminator
+	char buffer[BUFFER_SIZE];
+	memcpy(buffer, &header, sizeof(PacketHeader));
+	if (len >= BUFFER_SIZE - sizeof(PacketHeader)) {
+		fprintf(stderr, "[ERROR] Message too long to send.\n");
+		return -1; // Message too long
+	}
+	snprintf(buffer + sizeof(PacketHeader), BUFFER_SIZE - sizeof(PacketHeader), "%s\n", msg);
+
+	// Send the message in a loop to ensure all data is sent
     ssize_t total_sent = 0;
-    ssize_t bytes_left = len;
+	ssize_t bytes_left = len + sizeof(PacketHeader) + 1; // +1 for null terminator
 
     while (bytes_left > 0) {
-        ssize_t sent = send(sock, msg + total_sent, bytes_left, 0);
+        ssize_t sent = send(sock, buffer + total_sent, bytes_left, 0);
         if (sent < 0) {
             // For blocking sockets, EAGAIN/EWOULDBLOCK is unlikely unless a timeout is set.
             // Any send error here is typically a more serious issue.
@@ -290,7 +354,7 @@ void broadcast_room(Room *room, Client *sender, const char *format, ...) {
     while (member != NULL) {
         // A more robust check might involve a flag in the Client struct for validity
         if (/*member != sender && */member->sock >= 0) {
-            safe_send(member->sock, message);
+            safe_send(member->sock, message, TYPE_TEXT);
         }
         member = member->room_next;
     }
@@ -308,7 +372,7 @@ void broadcast_lobby(Client *sender, const char *format, ...) {
     Client *client = g_clients;
     while (client != NULL) {
         if (client != sender && client->room == NULL && client->sock >= 0) {
-             safe_send(client->sock, message);
+             safe_send(client->sock, message, TYPE_TEXT);
         }
         client = client->next;
     }
@@ -335,7 +399,7 @@ void cmd_users(Client *cli) {
         }
         pthread_mutex_unlock(&g_rooms_mutex);
         strcat(user_list, "\n");
-        safe_send(cli->sock, user_list);
+        safe_send(cli->sock, user_list, TYPE_USERS);
 
     } else {
         strcat(user_list, "[Server] Connected users: ");
@@ -350,23 +414,23 @@ void cmd_users(Client *cli) {
         }
         pthread_mutex_unlock(&g_clients_mutex);
         strcat(user_list, "\n");
-        safe_send(cli->sock, user_list);
+        safe_send(cli->sock, user_list, TYPE_USERS);
     }
 }
 
 void cmd_kick(Client* cli, const char* target_nick) {
 	if (!target_nick || strlen(target_nick) == 0) {
-		safe_send(cli->sock, "[Server] Usage: /kick <nickname>\n");
+		safe_send(cli->sock, "[Server] Usage: /kick <nickname>\n", TYPE_ERROR);
 		return;
 	}
 	// Check if the client is in a room
 	if (cli->room == NULL) {
-		safe_send(cli->sock, "[Server] You must be in a room to kick users.\n");
+		safe_send(cli->sock, "[Server] You must be in a room to kick users.\n", TYPE_ERROR);
 		return;
 	}
 	// Check if the client is the owner of the room
 	if (cli->room->owner != cli) {
-		safe_send(cli->sock, "[Server] Only the room owner can kick users.\n");
+		safe_send(cli->sock, "[Server] Only the room owner can kick users.\n", TYPE_ERROR);
 		return;
 	}
 	// Find the target client
@@ -374,7 +438,7 @@ void cmd_kick(Client* cli, const char* target_nick) {
 	if (!target_cli || target_cli->room != cli->room) {
 		char error_msg[BUFFER_SIZE];
 		snprintf(error_msg, sizeof(error_msg), "[Server] User '%s' not found in this room.\n", target_nick);
-		safe_send(cli->sock, error_msg);
+		safe_send(cli->sock, error_msg, TYPE_ERROR);
 		return;
 	}
 	// Remove the target client from the room
@@ -382,43 +446,43 @@ void cmd_kick(Client* cli, const char* target_nick) {
 	printf("[INFO] Client %s kicked %s from room '%s'.\n", cli->nick, target_nick, cli->room->name);
 	char success_msg[BUFFER_SIZE];
 	snprintf(success_msg, sizeof(success_msg), "[Server] User '%s' has been kicked from the room.\n", target_nick);
-	safe_send(cli->sock, success_msg);
+	// safe_send(cli->sock, success_msg);
 	broadcast_room(cli->room, NULL, "[Server] %s has been kicked from the room by %s.\n", target_nick, cli->nick);
 }
 
 void cmd_change(Client* cli, const char* room_name) {
-	// ≈¨∂Û¿Ãæ∆Æ∞° ¿ßƒ°«— πÊ »Æ¿Œ
+	// ÌÅ¥ÎùºÏù¥Ïñ∏Ìä∏Í∞Ä ÏúÑÏπòÌïú Î∞© ÌôïÏù∏
     Room* current_room = cli->room;
 	if (current_room == NULL) {
-		safe_send(cli->sock, "[Server] You are not in any room. Please join a room first.\n");
+		safe_send(cli->sock, "[Server] You are not in any room. Please join a room first.\n", TYPE_ERROR);
 		return;
 	}
-    // ≈¨∂Û¿Ãæ∆Æ∞° πÊ¿Â¿Œ¡ˆ »Æ¿Œ
+    // ÌÅ¥ÎùºÏù¥Ïñ∏Ìä∏Í∞Ä Î∞©Ïû•Ïù∏ÏßÄ ÌôïÏù∏
 	if (current_room->owner != cli) {
-		safe_send(cli->sock, "[Server] Only the room owner can change the room name.\n");
+		safe_send(cli->sock, "[Server] Only the room owner can change the room name.\n", TYPE_ERROR);
 		return;
 	}
-	// πÊ ¿Ã∏ß¿Ã ¿Ø»ø«—¡ˆ »Æ¿Œ
+	// Î∞© Ïù¥Î¶ÑÏù¥ Ïú†Ìö®ÌïúÏßÄ ÌôïÏù∏
     if (!room_name || strlen(room_name) == 0) {
-		safe_send(cli->sock, "[Server] Usage: /change <new_room_name>\n");
+		safe_send(cli->sock, "[Server] Usage: /change <new_room_name>\n", TYPE_ERROR);
     }
-	// πÊ ¿Ã∏ß¿Ã ¡ﬂ∫πµ«¥¬¡ˆ »Æ¿Œ
+	// Î∞© Ïù¥Î¶ÑÏù¥ Ï§ëÎ≥µÎêòÎäîÏßÄ ÌôïÏù∏
 	pthread_mutex_lock(&g_rooms_mutex);
 	Room* existing_room = find_room_unlocked(room_name);
 	if (existing_room != NULL) {
 		pthread_mutex_unlock(&g_rooms_mutex);
 		char error_msg[BUFFER_SIZE];
 		snprintf(error_msg, sizeof(error_msg), "[Server] Room name '%s' already exists.\n", room_name);
-		safe_send(cli->sock, error_msg);
+		safe_send(cli->sock, error_msg, TYPE_ERROR);
 		return;
 	}
-	// πÊ ¿Ã∏ß ∫Ø∞Ê
+	// Î∞© Ïù¥Î¶Ñ Î≥ÄÍ≤Ω
 	strncpy(current_room->name, room_name, sizeof(current_room->name) - 1);
 	current_room->name[sizeof(current_room->name) - 1] = '\0';
 	pthread_mutex_unlock(&g_rooms_mutex);
 	char success_msg[BUFFER_SIZE];
 	snprintf(success_msg, sizeof(success_msg), "[Server] Room name changed to '%s'.\n", current_room->name);
-	safe_send(cli->sock, success_msg);
+	// safe_send(cli->sock, success_msg);
 	broadcast_room(current_room, cli, "[Server] The room name has been changed to '%s'.\n", current_room->name);
 }
 
@@ -456,45 +520,23 @@ void cmd_rooms(int sock) {
         strcat(room_list, "\n");
     }
     pthread_mutex_unlock(&g_rooms_mutex);
-    safe_send(sock, room_list);
-}
-
-void cmd_dm(Client *sender, const char *target_nick, const char *message) {
-    if (!target_nick || !message || strlen(target_nick) == 0 || strlen(message) == 0) {
-        safe_send(sender->sock, "[Server] Usage: /dm <nickname> <message>\n");
-        return;
-    }
-    Client *target_cli = find_client_by_nick(target_nick);
-    if (!target_cli) {
-        char error_msg[BUFFER_SIZE];
-        snprintf(error_msg, sizeof(error_msg), "[Server] User '%s' not found.\n", target_nick);
-        safe_send(sender->sock, error_msg);
-        return;
-    }
-    if (target_cli == sender) {
-         safe_send(sender->sock, "[Server] You cannot DM yourself.\n");
-         return;
-    }
-    char formatted_msg[BUFFER_SIZE];
-    snprintf(formatted_msg, sizeof(formatted_msg), "[DM from %s] %s\n", sender->nick, message);
-    safe_send(target_cli->sock, formatted_msg);
-    safe_send(sender->sock, "[Server] DM sent.\n");
+    safe_send(sock, room_list, TYPE_ROOMS);
 }
 
 void cmd_create_room(Client *cli, const char *room_name) {
     if (!room_name || strlen(room_name) == 0) {
-        safe_send(cli->sock, "[Server] Usage: /create <room_name>\n");
+        safe_send(cli->sock, "[Server] Usage: /create <room_name>\n", TYPE_ERROR);
         return;
     }
     // Check max room name length using struct member size
     if (strlen(room_name) >= sizeof(((Room*)0)->name)) {
         char error_msg[BUFFER_SIZE];
         snprintf(error_msg, sizeof(error_msg), "[Server] Room name too long (max %zu characters).\n", sizeof(((Room*)0)->name) - 1);
-        safe_send(cli->sock, error_msg);
+        safe_send(cli->sock, error_msg, TYPE_ERROR);
         return;
     }
     if (cli->room != NULL) {
-        safe_send(cli->sock, "[Server] You are already in a room. Please /leave first.\n");
+        safe_send(cli->sock, "[Server] You are already in a room. Please /leave first.\n", TYPE_ERROR);
         return;
     }
 
@@ -505,7 +547,7 @@ void cmd_create_room(Client *cli, const char *room_name) {
         pthread_mutex_unlock(&g_rooms_mutex);
         char error_msg[BUFFER_SIZE];
         snprintf(error_msg, sizeof(error_msg), "[Server] Room name '%s' already exists.\n", room_name);
-        safe_send(cli->sock, error_msg);
+        safe_send(cli->sock, error_msg, TYPE_ERROR);
         return;
     }
     // ID assignment and adding to list are done under this lock
@@ -514,7 +556,7 @@ void cmd_create_room(Client *cli, const char *room_name) {
     Room *new_room = (Room *)malloc(sizeof(Room));
     if (!new_room) {
         perror("malloc for new room failed");
-        safe_send(cli->sock, "[Server] Failed to create room.\n");
+        safe_send(cli->sock, "[Server] Failed to create room.\n", TYPE_ERROR);
         return;
     }
     strncpy(new_room->name, room_name, sizeof(new_room->name) - 1);
@@ -524,7 +566,7 @@ void cmd_create_room(Client *cli, const char *room_name) {
     new_room->member_count = 0;
     new_room->next = NULL;
     new_room->prev = NULL;
-	new_room->owner = cli; // πÊ¿Â¿ª ¡ˆ¡§
+	new_room->owner = cli; // Î∞©Ïû•ÏùÑ ÏßÄÏ†ï
 
     list_add_room_unlocked(new_room); // Add to list while still holding lock
     pthread_mutex_unlock(&g_rooms_mutex);
@@ -535,16 +577,16 @@ void cmd_create_room(Client *cli, const char *room_name) {
     printf("[INFO] Client %s created room '%s' (ID: %u) and joined.\n", cli->nick, new_room->name, new_room->id);
     char success_msg[BUFFER_SIZE];
     snprintf(success_msg, sizeof(success_msg), "[Server] Room '%s' (ID: %u) created and joined.\n", new_room->name, new_room->id);
-    safe_send(cli->sock, success_msg);
+    safe_send(cli->sock, new_room->name, TYPE_CREATE);
 }
 
 void cmd_join_room(Client *cli, const char *room_id_str) {
     if (!room_id_str || strlen(room_id_str) == 0) {
-        safe_send(cli->sock, "[Server] Usage: /join <room_id>\n");
+        safe_send(cli->sock, "[Server] Usage: /join <room_id>\n", TYPE_ERROR);
         return;
     }
     if (cli->room != NULL) {
-        safe_send(cli->sock, "[Server] You are already in a room. Please /leave first.\n");
+        safe_send(cli->sock, "[Server] You are already in a room. Please /leave first.\n", TYPE_ERROR);
         return;
     }
 
@@ -553,7 +595,7 @@ void cmd_join_room(Client *cli, const char *room_id_str) {
 
     // Validate room_id_str is a valid positive number
     if (*endptr != '\0' || num_id <= 0 || num_id >= g_next_room_id || num_id > 0xFFFFFFFF) { // UINT_MAX approx
-        safe_send(cli->sock, "[Server] Invalid room ID. Please use a valid positive number.\n");
+        safe_send(cli->sock, "[Server] Invalid room ID. Please use a valid positive number.\n", TYPE_ERROR);
         return;
     }
     unsigned int room_id_to_join = (unsigned int)num_id;
@@ -562,28 +604,88 @@ void cmd_join_room(Client *cli, const char *room_id_str) {
     if (!target_room) {
         char error_msg[BUFFER_SIZE];
         snprintf(error_msg, sizeof(error_msg), "[Server] Room with ID %u not found.\n", room_id_to_join);
-        safe_send(cli->sock, error_msg);
+        safe_send(cli->sock, error_msg, TYPE_ERROR);
         return;
     }
     room_add_member(target_room, cli);
     printf("[INFO] Client %s joined room '%s' (ID: %u).\n", cli->nick, target_room->name, target_room->id);
     char success_msg[BUFFER_SIZE];
     snprintf(success_msg, sizeof(success_msg), "[Server] Joined room '%s' (ID: %u).\n", target_room->name, target_room->id);
-    safe_send(cli->sock, success_msg);
+    // ÏàòÏ†ï ÌïÑÏöî
+    safe_send(cli->sock, success_msg, TYPE_JOIN);
     broadcast_room(target_room, cli, "[Server] %s joined the room.\n", cli->nick);
 }
 
 void cmd_leave_room(Client *cli) {
     if (cli->room == NULL) {
-        safe_send(cli->sock, "[Server] You are not in any room.\n");
+        safe_send(cli->sock, "[Server] You are not in any room.\n", TYPE_ERROR);
         return;
     }
     Room *current_room = cli->room;
     broadcast_room(current_room, cli, "[Server] %s left the room.\n", cli->nick);
     room_remove_member(current_room, cli); // This also sets cli->room = NULL
     printf("[INFO] Client %s left room '%s'.\n", cli->nick, current_room->name);
-    safe_send(cli->sock, "[Server] You left the room.\n");
+    safe_send(cli->sock, "[Server] You left the room.\n", TYPE_LEAVE);
     destroy_room_if_empty(current_room);
+}
+
+void cmd_friends(Client* client) {
+	pthread_mutex_lock(&g_clients_mutex);
+    char buffer[BUFFER_SIZE] = { 0 }; // Ï∂©Î∂ÑÌûà ÌÅ∞ Î≤ÑÌçºÎ•º Ï§ÄÎπÑ
+    strcpy(buffer, "Friends:\n");
+
+    for (int i = 0; i < client->friend_count; ++i) {
+        if (client->friend_list[i] != NULL) {
+            strcat(buffer, client->friend_list[i]->nick);
+            strcat(buffer, "\n");
+        }
+    }
+	pthread_mutex_unlock(&g_clients_mutex);
+
+    safe_send(client->sock, buffer, TYPE_FRIENDS);
+}
+
+void cmd_add_friend(Client *cli, const char *friend_nick) {
+    if (!friend_nick || strlen(friend_nick) == 0) {
+        safe_send(cli->sock, "[Server] Usage: /addfriend <nickname>\n", TYPE_ERROR);
+        return;
+    }
+    Client *friend_cli = find_client_by_nick(friend_nick);
+    char msg[BUFFER_SIZE];
+    // Ìï¥Îãπ Ïù¥Î¶ÑÏùò ÏπúÍµ¨Í∞Ä ÏóÜÎäî Í≤ΩÏö∞
+    if (!friend_cli) {
+        snprintf(msg, sizeof(msg), "Failed %s", friend_nick);
+        safe_send(cli->sock, msg, TYPE_ADD_FRIEND);
+        return;
+    }
+    if (friend_cli == cli) {
+        safe_send(cli->sock, "[Server] You cannot add yourself as a friend.\n", TYPE_ERROR);
+        return;
+    }
+    // Ìï¥Îãπ Ïù¥Î¶ÑÏùò ÏÇ¨Ïö©ÏûêÍ∞Ä ÏûàÎäî Í≤ΩÏö∞
+	list_add_friend(cli, friend_cli); // Add friend under lock
+    snprintf(msg, sizeof(msg), "Succeed %s", friend_cli->nick);
+    safe_send(cli->sock, msg, TYPE_ADD_FRIEND);
+}
+
+void cmd_remove_friend(Client *cli, const char *friend_nick) {
+    if (!friend_nick || strlen(friend_nick) == 0) {
+        safe_send(cli->sock, "[Server] Usage: /removefriend <nickname>\n", TYPE_ERROR);
+        return;
+    }
+    Client *friend_cli = find_client_by_nick(friend_nick);
+    if (!friend_cli) {
+        safe_send(cli->sock, "[Server] User not found.\n", TYPE_ERROR);
+        return;
+    }
+    if (friend_cli == cli) {
+        safe_send(cli->sock, "[Server] You cannot remove yourself as a friend.\n", TYPE_ERROR);
+        return;
+    }
+    list_remove_friend(cli, friend_cli); // Remove friend under lock
+    char success_msg[BUFFER_SIZE];
+    snprintf(success_msg, sizeof(success_msg), "[Server] Removed %s from your friends list.\n", friend_cli->nick);
+    safe_send(cli->sock, success_msg, TYPE_REMOVE_FRIEND);
 }
 
 void get_nickname(Client *user) {
@@ -616,13 +718,13 @@ void get_nickname(Client *user) {
     }
 
     printf("[INFO] New user connected: %s (fd %d)\n", user->nick, user->sock);
-    
-    char welcome_msg[BUFFER_SIZE];
-    snprintf(welcome_msg, sizeof(welcome_msg),
-             "[Server] Welcome! Your assigned nickname is %s.\n"
-             "[Server] To change it, type: /nick <new_nickname>\n"
-             "[Server] Type /help for a list of commands.\n", user->nick);
-    safe_send(user->sock, welcome_msg);
+}
+
+void print_buffer_hex(const unsigned char* buf, size_t len) {
+    for (size_t i = 0; i < len; ++i) {
+        printf("%02X ", buf[i]);
+    }
+    printf("\n");
 }
 
 void *client_process(void *arg) {
@@ -653,131 +755,120 @@ void *client_process(void *arg) {
         buffer[bytes_received] = '\0';
         buffer[strcspn(buffer, "\n")] = 0; // Remove trailing newline
 
-        // ≈¨∂Û¿Ãæ∆Æø°º≠ ∆–≈∂¿ª ¿¸º€«“ ∂ß ∏ﬁΩ√¡ˆ ±∏¡∂
+        // ÌÅ¥ÎùºÏù¥Ïñ∏Ìä∏ÏóêÏÑú Ìå®ÌÇ∑ÏùÑ Ï†ÑÏÜ°Ìï† Îïå Î©îÏãúÏßÄ Íµ¨Ï°∞
         // [TYPE_TEXT][length][message]
-        // send∑Œ ∆–≈∂«Ï¥ı ±∏¡∂√º∏¶ ¿¸º€«—¥Ÿ∏È, πÆ¿⁄ø≠∑Œ ¿¸º€¿Ã µ«≥™? æ∆¥œ∏È º€Ω≈¿⁄ √¯ø°º≠ ¿¸º€ ≈∏¿‘¿ª ∞·¡§«“ ºˆ ¿÷≥™?
-        // --> ¿Ã¡¯ µ•¿Ã≈Õ «¸≈¬∑Œ ¿¸º€¿Ã µ .
+        // sendÎ°ú Ìå®ÌÇ∑Ìó§Îçî Íµ¨Ï°∞Ï≤¥Î•º Ï†ÑÏÜ°ÌïúÎã§Î©¥, Î¨∏ÏûêÏó¥Î°ú Ï†ÑÏÜ°Ïù¥ ÎêòÎÇò? ÏïÑÎãàÎ©¥ ÏÜ°Ïã†Ïûê Ï∏°ÏóêÏÑú Ï†ÑÏÜ° ÌÉÄÏûÖÏùÑ Í≤∞Ï†ïÌï† Ïàò ÏûàÎÇò?
+        // --> Ïù¥ÏßÑ Îç∞Ïù¥ÌÑ∞ ÌòïÌÉúÎ°ú Ï†ÑÏÜ°Ïù¥ Îê®.
         if (bytes_received < sizeof(PacketHeader)) {
-            safe_send(cli->sock, "[Server] Invalid packet received.\n");
+            safe_send(cli->sock, "[Server] Invalid packet received.\n", TYPE_ERROR);
 			printf("[Debug] Received packet too small: %zd bytes\n", bytes_received);
             continue;
         }
-        // ∆–≈∂ «Ï¥ı∏¶ ¿–æÓø¿±‚
+        // Ìå®ÌÇ∑ Ìó§ÎçîÎ•º ÏùΩÏñ¥Ïò§Í∏∞
         PacketHeader header;
         memcpy(&header, buffer, sizeof(PacketHeader));
-        header.type = ntohs(header.type); // Convert type to host byte order (∫∏≥æ ∂ß¥¬ htons, πﬁ¿ª ∂ßø°¥¬ ntohs)
         header.length = ntohs(header.length); // Convert length to host byte order
 		printf("[DEBUG] Received packet type: %d, length: %d\n", header.type, header.length);
 
-		// "/" ¥ÎΩ≈ header.type∏¶ ªÁøÎ«œø© ∏Ì∑…æÓ∏¶ √≥∏Æ
-        switch (header.type)
-        {
-		case TYPE_TEXT:
-			// Handle text message
-			if (header.length > 0 && header.length < BUFFER_SIZE) {
-				char* message = buffer + sizeof(PacketHeader);
-				message[header.length] = '\0'; // Null-terminate the message
-				if (cli->room != NULL) {
-					broadcast_room(cli->room, cli, "[%s] %s\n", cli->nick, message);
-				}
-				else {
-					safe_send(cli->sock, "[Server] You must join a room to send messages. Type /rooms or /create.\n");
-				}
-			}
-			else {
-				safe_send(cli->sock, "[Server] Invalid message length.\n");
-			}
-			break;
-        default:
-            break;
+        print_buffer_hex(buffer, sizeof(PacketHeader));
+
+		char* message_start = buffer + sizeof(PacketHeader);
+        if (header.length > 0)
+		{
+			// Ensure the message is null-terminated
+			message_start[header.length] = '\0';
+		}
+        else {
+            // Invalid length, skip processing
+            safe_send(cli->sock, "[Server] Invalid message length.\n", TYPE_ERROR);
+            continue;
         }
 
-        if (buffer[0] == '/') {
-            char *cmd_full = strdup(buffer); // strtok modifies the string, so duplicate it
-            if (!cmd_full) { perror("strdup"); continue; }
-
-            char *cmd = strtok(buffer + 1, " ");
-            if (!cmd) {
-                safe_send(cli->sock, "[Server] Unknown command. Type /help.\n");
-                free(cmd_full);
-                continue;
-            }
-
-            if (strcmp(cmd, "nick") == 0) {
-                char *newnick = strtok(NULL, " ");
-                if (newnick && strlen(newnick) > 0) {
-                    Client *existing = find_client_by_nick(newnick);
-                    if (existing != NULL && existing != cli) {
-                        char error_msg[BUFFER_SIZE];
-                        snprintf(error_msg, sizeof(error_msg), "[Server] Nickname '%s' is already taken.\n", newnick);
-                        safe_send(cli->sock, error_msg);
-                    } else {
-                        printf("[INFO] %s changed nickname to %s\n", cli->nick, newnick);
-                        strncpy(cli->nick, newnick, sizeof(cli->nick) - 1);
-                        cli->nick[sizeof(cli->nick) - 1] = '\0';
-                        char success_msg[BUFFER_SIZE];
-                        snprintf(success_msg, sizeof(success_msg), "[Server] Nickname updated to %s.\n", cli->nick);
-                        safe_send(cli->sock, success_msg);
-                    }
-                } else {
-                    safe_send(cli->sock, "[Server] Usage: /nick <new_nickname>\n");
-                }
-            } else if (strcmp(cmd, "create") == 0) {
-                char *room_name = strtok(NULL, " ");
-                cmd_create_room(cli, room_name);
-            } else if (strcmp(cmd, "join") == 0) {
-                char *room_name = strtok(NULL, " ");
-                cmd_join_room(cli, room_name);
-            } else if (strcmp(cmd, "leave") == 0) {
-                cmd_leave_room(cli);
-            } else if (strcmp(cmd, "rooms") == 0) {
-                cmd_rooms(cli->sock);
-            } else if (strcmp(cmd, "users") == 0) {
-                cmd_users(cli);
-            } else if (strcmp(cmd, "change") == 0) {
-				char *room_name = strtok(NULL, " "); // this is room name
-                cmd_change(cli, room_name);
-            } else if (strcmp(cmd, "kick") == 0) {
-				char* target_nick = strtok(NULL, " "); // this is target nick
-				cmd_kick(cli, target_nick);
-            } else if (strcmp(cmd, "dm") == 0) {
-                 // Use the duplicated cmd_full to extract arguments for /dm
-                 char *dm_target_token = strtok(cmd_full + 1, " "); // Skip '/' and "dm"
-                 dm_target_token = strtok(NULL, " "); // This should be the target nick
-                 char *dm_msg_start = NULL;
-                 if (dm_target_token) {
-                     dm_msg_start = strtok(NULL, ""); // Get the rest of the string as message
-                     // Trim leading spaces from message if any
-                     if (dm_msg_start) {
-                        while(*dm_msg_start == ' ') dm_msg_start++;
-                        if (*dm_msg_start == '\0') dm_msg_start = NULL; // Empty message after spaces
-                     }
-                 }
-                 cmd_dm(cli, dm_target_token, dm_msg_start);
-            } else if (strcmp(cmd, "help") == 0) {
-                const char *help =
-                    "[Server] Available commands:\n"
-                    " /nick <name>   - Change your nickname\n"
-                    " /rooms         - List available rooms\n"
-                    " /create <room_name> - Create a new room and join it\n"
-                    " /join <room_id>   - Join an existing room by its ID\n"
-                    " /leave         - Leave the current room\n"
-                    " /users         - List users (in room if joined, else all connected)\n"
-					" /change <new_room_name> - Change the name of the room (if you are the owner)\n"
-					" /kick <nick>   - Kick a user from the room (if you are the owner)\n"
-                    " /dm <nick> <msg> - Send a direct message to a user\n"
-                    " /help          - Show this help message\n";
-                safe_send(cli->sock, help);
-            } else {
-                safe_send(cli->sock, "[Server] Unknown command. Type /help.\n");
-            }
-            free(cmd_full);
-        } else {
+		// "/" ÎåÄÏã† header.typeÎ•º ÏÇ¨Ïö©ÌïòÏó¨ Î™ÖÎ†πÏñ¥Î•º Ï≤òÎ¶¨
+        switch (header.type)
+        {
+        case TYPE_TEXT:
+            // Handle text message
+            printf("[DEBUG] Received message from %s: %s\n", cli->nick, message_start);
             if (cli->room != NULL) {
-                broadcast_room(cli->room, cli, "[%s] %s\n", cli->nick, buffer);
-            } else {
-                safe_send(cli->sock, "[Server] You must join a room to send messages. Type /rooms or /create.\n");
+                broadcast_room(cli->room, cli, "[%s] %s\n", cli->nick, message_start);
             }
+            else {
+                safe_send(cli->sock, "[Server] You must join a room to send messages. Type /rooms or /create.\n", TYPE_ERROR);
+            }
+            break;
+        case TYPE_NICK:
+            Client* existing = find_client_by_nick_unlocked(message_start); // Ïù¥Î¶Ñ Ï§ëÎ≥µ Í≤ÄÏÇ¨
+            if (existing != NULL && existing != cli) {
+                char error_msg[BUFFER_SIZE];
+                snprintf(error_msg, sizeof(error_msg), "[Server] Nickname '%s' is already taken.\n", message_start);
+                safe_send(cli->sock, error_msg, TYPE_ERROR);
+            }
+            else {
+                printf("[INFO] %s changed nickname to %s\n", cli->nick, message_start);
+                strncpy(cli->nick, message_start, sizeof(cli->nick) - 1);
+                cli->nick[sizeof(cli->nick) - 1] = '\0';
+                //char success_msg[BUFFER_SIZE];
+                //snprintf(success_msg, sizeof(success_msg), "[Server] Nickname updated to %s.\n", cli->nick);
+                //safe_send(cli->sock, success_msg);
+            }
+            break;
+		case TYPE_ROOMS:
+            cmd_rooms(cli->sock);
+            break;
+        case TYPE_CREATE:
+        {
+			if (header.length <= 0 || header.length >= sizeof(cli->nick)) {
+				safe_send(cli->sock, "[Server] Invalid room name length.\n", TYPE_ERROR);
+				break;
+			}
+            char* room_name = strtok(message_start, "\n");
+            cmd_create_room(cli, room_name);
+            break;
+        }
+        case TYPE_JOIN:
+        {
+            char* room_name = strtok(message_start, "\n");
+            cmd_join_room(cli, room_name);
+            break;
+        }
+		case TYPE_LEAVE:
+            cmd_leave_room(cli);
+            break;
+		case TYPE_USERS:
+            cmd_users(cli);
+            break;
+        case TYPE_FRIENDS:
+			cmd_friends(cli);
+            break;
+        case TYPE_CHANGE:
+        {
+            char* room_name = strtok(NULL, " "); // this is room name
+            cmd_change(cli, room_name);
+            break;
+        }
+        case TYPE_KICK :
+            char* target_nick = strtok(message_start, "\n"); // this is target nick
+            cmd_kick(cli, target_nick);
+            break;
+        case TYPE_ADD_FRIEND:
+            cmd_add_friend(cli, message_start);
+            break;
+        case TYPE_REMOVE_FRIEND:
+        {
+            // Handle removing a friend
+            if (header.length > 0 && header.length < sizeof(cli->nick)) {
+                char* friend_nick = buffer + sizeof(PacketHeader);
+                friend_nick[header.length] = '\0'; // Null-terminate the friend's nickname
+                cmd_remove_friend(cli, friend_nick);
+            }
+            else {
+                safe_send(cli->sock, "[Server] Invalid friend nickname length.\n", TYPE_ERROR);
+            }
+            break;
+        }
+        default:
+            break;
         }
     }
 
