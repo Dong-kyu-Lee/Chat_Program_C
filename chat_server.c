@@ -320,7 +320,9 @@ ssize_t safe_send(int sock, const char *msg, PacketType type) {
 		fprintf(stderr, "[ERROR] Message too long to send.\n");
 		return -1; // Message too long
 	}
-	snprintf(buffer + sizeof(PacketHeader), BUFFER_SIZE - sizeof(PacketHeader), "%s\n", msg);
+	memcpy(buffer + sizeof(PacketHeader), msg, len);
+	buffer[sizeof(PacketHeader) + len] = '\0'; // Null-terminate the message
+	//snprintf(buffer + sizeof(PacketHeader), BUFFER_SIZE - sizeof(PacketHeader), "%s\n", msg);
 
 	// Send the message in a loop to ensure all data is sent
     ssize_t total_sent = 0;
@@ -340,7 +342,7 @@ ssize_t safe_send(int sock, const char *msg, PacketType type) {
     return total_sent;
 }
 
-void broadcast_room(Room *room, Client *sender, const char *format, ...) {
+void broadcast_room(Room* room, Client* sender, const char* format, ...) {
     if (!room) return; // Cannot broadcast to a null room
 
     char message[BUFFER_SIZE];
@@ -349,12 +351,16 @@ void broadcast_room(Room *room, Client *sender, const char *format, ...) {
     vsnprintf(message, sizeof(message), format, args);
     va_end(args);
 
+    // sender의 이름과 메시지를 "\n"으로 합침
+    char sendbuf[BUFFER_SIZE * 2];
+    snprintf(sendbuf, sizeof(sendbuf), "%s\n%s", sender->nick, message);
+	printf("[DEBUG] Broadcasting to room '%s': %s\n", room->name, sendbuf);
+
     pthread_mutex_lock(&g_rooms_mutex);
-    Client *member = room->members;
+    Client* member = room->members;
     while (member != NULL) {
-        // A more robust check might involve a flag in the Client struct for validity
-        if (/*member != sender && */member->sock >= 0) {
-            safe_send(member->sock, message, TYPE_TEXT);
+        if (member->sock >= 0) {
+            safe_send(member->sock, sendbuf, TYPE_TEXT);
         }
         member = member->room_next;
     }
@@ -384,35 +390,18 @@ void cmd_users(Client *cli) {
     user_list[0] = '\0';
 
     if (cli->room) {
-        strcat(user_list, "[Server] Users in room '");
-        strcat(user_list, cli->room->name);
-        strcat(user_list, "': ");
+        strcat(user_list, "Users:\n");
 
         pthread_mutex_lock(&g_rooms_mutex);
         Client *member = cli->room->members;
         while (member != NULL) {
             strcat(user_list, member->nick);
             if (member->room_next != NULL) {
-                strcat(user_list, ", ");
+                strcat(user_list, "\n");
             }
             member = member->room_next;
         }
         pthread_mutex_unlock(&g_rooms_mutex);
-        strcat(user_list, "\n");
-        safe_send(cli->sock, user_list, TYPE_USERS);
-
-    } else {
-        strcat(user_list, "[Server] Connected users: ");
-        pthread_mutex_lock(&g_clients_mutex);
-        Client *client = g_clients;
-        while (client != NULL) {
-            strcat(user_list, client->nick);
-            if (client->next != NULL) {
-                strcat(user_list, ", ");
-            }
-            client = client->next;
-        }
-        pthread_mutex_unlock(&g_clients_mutex);
         strcat(user_list, "\n");
         safe_send(cli->sock, user_list, TYPE_USERS);
     }
@@ -490,12 +479,10 @@ void cmd_rooms(int sock) {
     pthread_mutex_lock(&g_rooms_mutex);
     char room_list[BUFFER_SIZE] = { 0 }; // 충분히 큰 버퍼를 준비
     strcpy(room_list, "Rooms:\n");
-	printf("[DEBUG] Rooms:\n");
 	Room* current = g_rooms;
 	while (current != NULL) {
 		char room_info[BUFFER_SIZE];
 		snprintf(room_info, sizeof(room_info), "%s %d\n", current->name, current->member_count);
-		printf("[DEBUG] %s", room_info);
 		strncat(room_list, room_info, sizeof(room_list) - strlen(room_list) - 1); // 안전하게 추가
 		current = current->next;
 	}
@@ -679,13 +666,6 @@ void get_nickname(Client *user) {
     printf("[INFO] New user connected: %s (fd %d)\n", user->nick, user->sock);
 }
 
-void print_buffer_hex(const unsigned char* buf, size_t len) {
-    for (size_t i = 0; i < len; ++i) {
-        printf("%02X ", buf[i]);
-    }
-    printf("\n");
-}
-
 void *client_process(void *arg) {
     Client *cli = (Client *)arg;
     char buffer[BUFFER_SIZE];
@@ -714,10 +694,6 @@ void *client_process(void *arg) {
         buffer[bytes_received] = '\0';
         buffer[strcspn(buffer, "\n")] = 0; // Remove trailing newline
 
-        // 클라이언트에서 패킷을 전송할 때 메시지 구조
-        // [TYPE_TEXT][length][message]
-        // send로 패킷헤더 구조체를 전송한다면, 문자열로 전송이 되나? 아니면 송신자 측에서 전송 타입을 결정할 수 있나?
-        // --> 이진 데이터 형태로 전송이 됨.
         if (bytes_received < sizeof(PacketHeader)) {
             safe_send(cli->sock, "[Server] Invalid packet received.\n", TYPE_ERROR);
 			printf("[Debug] Received packet too small: %zd bytes\n", bytes_received);
@@ -729,15 +705,13 @@ void *client_process(void *arg) {
         header.length = ntohs(header.length); // Convert length to host byte order
 		printf("[DEBUG] Received packet type: %d, length: %d\n", header.type, header.length);
 
-        print_buffer_hex(buffer, sizeof(PacketHeader));
-
 		char* message_start = buffer + sizeof(PacketHeader);
         if (header.length > 0)
 		{
 			// Ensure the message is null-terminated
 			message_start[header.length] = '\0';
 		}
-        else {
+        else if(header.length < 0) {
             // Invalid length, skip processing
             safe_send(cli->sock, "[Server] Invalid message length.\n", TYPE_ERROR);
             continue;
@@ -750,7 +724,7 @@ void *client_process(void *arg) {
             // Handle text message
             printf("[DEBUG] Received message from %s: %s\n", cli->nick, message_start);
             if (cli->room != NULL) {
-                broadcast_room(cli->room, cli, "[%s] %s\n", cli->nick, message_start);
+                broadcast_room(cli->room, cli, "%s", message_start);
             }
             else {
                 safe_send(cli->sock, "[Server] You must join a room to send messages. Type /rooms or /create.\n", TYPE_ERROR);
@@ -765,11 +739,6 @@ void *client_process(void *arg) {
             }
             else {
                 printf("[INFO] %s changed nickname to %s\n", cli->nick, message_start);
-                strncpy(cli->nick, message_start, sizeof(cli->nick) - 1);
-                cli->nick[sizeof(cli->nick) - 1] = '\0';
-                //char success_msg[BUFFER_SIZE];
-                //snprintf(success_msg, sizeof(success_msg), "[Server] Nickname updated to %s.\n", cli->nick);
-                //safe_send(cli->sock, success_msg);
             }
             break;
 		case TYPE_ROOMS:
@@ -815,15 +784,7 @@ void *client_process(void *arg) {
             break;
         case TYPE_REMOVE_FRIEND:
         {
-            // Handle removing a friend
-            if (header.length > 0 && header.length < sizeof(cli->nick)) {
-                char* friend_nick = buffer + sizeof(PacketHeader);
-                friend_nick[header.length] = '\0'; // Null-terminate the friend's nickname
-                cmd_remove_friend(cli, friend_nick);
-            }
-            else {
-                safe_send(cli->sock, "[Server] Invalid friend nickname length.\n", TYPE_ERROR);
-            }
+            cmd_remove_friend(cli, message_start);
             break;
         }
         default:

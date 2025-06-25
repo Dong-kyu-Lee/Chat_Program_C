@@ -20,8 +20,11 @@ typedef enum PacketType {
     TYPE_KICK = 9, // Data : nickname of the user to kick
     TYPE_ADD_FRIEND = 11, // Data : nickname of the user to add
 	TYPE_REMOVE_FRIEND = 12, // Data : nickname of the user to remove
-    TYPE_HELP = 13,
-	TYPE_ERROR = 14, // Data : error message string
+	TYPE_VOTES = 13, // Data : vote title and options
+	TYPE_CREATE_VOTE = 14, // Data : vote title and options
+	TYPE_DO_VOTE = 15, // Data : vote name and selected option
+	TYPE_VOTE_RESULT = 16,
+	TYPE_ERROR = 17, // Data : error message string
 } PacketType;
 
 typedef struct Client {
@@ -45,4 +48,17 @@ typedef struct Room {
     struct Room* next;
     struct Room* prev;
     struct Client* owner; // owner of the room
+	struct Vote* votes[20]; // List of votes in the room
+    int num_votes;
 } Room;
+
+typedef struct Vote {
+	char title[64]; // Title of vote
+	struct Client* voters[20]; // List of voters
+	char* options[10][64]; // Options for the vote
+	int option_votes[10]; // Number of votes for each option
+    int num_options; // Number of options
+	int is_anonymous; // Whether the vote is anonymous
+	int is_duplicate; // Whether the vote allows duplicate votes
+	int is_finished; // Whether the vote is finished
+} Vote;

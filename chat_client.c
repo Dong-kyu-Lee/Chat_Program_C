@@ -20,6 +20,14 @@ char* rooms[20];
 int members[20];
 int num_rooms = 0;
 
+// 방에 존재하는 유저 목록 예시 데이터
+char* users_in_room[20];
+int num_users_in_room = 0;
+
+// 특정 방에 존재하는 투표 목록 예시 데이터
+Vote* votes[20];
+int num_votes = 0;
+
 // 전역 위젯 포인터 (탭 전환용)
 GtkWidget* stack;
 GtkWidget* friend_tab_btn;
@@ -27,8 +35,9 @@ GtkWidget* chat_tab_btn;
 GtkWidget* chat_tab;
 GtkWidget* friend_tab;
 
-// 전역 위젯 포인터 (친구 찾기용)
 GtkWidget* find_friend_dialog;
+GtkWidget* user_list; // 방에 존재하는 유저 목록
+
 
 // UI elements
 GtkWidget *ip_entry;
@@ -36,11 +45,12 @@ GtkWidget *port_entry;
 GtkWidget *name_entry; // Declare label_name globally
 GtkWidget *connect_button;
 GtkWidget *chat_view;
-GtkWidget *message_entry;
+GtkWidget* entry; // 채팅 입력창
 GtkWidget *send_button;
 GtkWidget *window; // Enter window
 GtkWidget* main_window;
 GtkWidget *scrolled_window; // Declare scrolled_window globally
+GtkWidget* listbox;
 
 int sock = -1; // Socket descriptor for the server connection
 pthread_t recv_thread_id = 0; // Thread ID for the receiver thread
@@ -50,13 +60,6 @@ typedef struct {
     GtkWidget *widget;
     gboolean sensitive;
 } WidgetSensitivityData;
-
-void print_buffer_hex(const unsigned char* buf, size_t len) {
-    for (size_t i = 0; i < len; ++i) {
-        printf("%02X ", buf[i]);
-    }
-    printf("\n");
-}
 
 void send_message(PacketType type, const char* message) {
 	if (sock < 0) {
@@ -70,8 +73,6 @@ void send_message(PacketType type, const char* message) {
 	memcpy(buffer, &header, sizeof(PacketHeader));
 	snprintf(buffer + sizeof(PacketHeader), BUFFER_SIZE - sizeof(PacketHeader), "%s\n", message);
 	printf("[DEBUG] Sending packet type: %d, length: %d, message: %s\n", type, ntohs(header.length), message);
-
-    print_buffer_hex(buffer, sizeof(PacketHeader));
 
 	// Send the message to the server
 	if (send(sock, buffer, sizeof(PacketHeader) + strlen(message) + 1, 0) < 0) {
@@ -210,15 +211,58 @@ void on_create_room(GtkButton* button, gpointer user_data) {
 	gtk_widget_destroy(dialog);
 }
 
+// 1:1 채팅방 생성 콜백
+void on_start_chat_clicked(GtkWidget* widget, gpointer data) {
+    const char* friend_name = (const char*)data;
+    printf("Start 1:1 chat with %s\n", friend_name);
+    // 1:1 채팅방 생성 로직 구현
+}
+
+// 친구 삭제 콜백
+void on_remove_friend_clicked(GtkWidget* widget, gpointer data) {
+    const char* friend_name = (const char*)data;
+    printf("Remove friend: %s\n", friend_name);
+    // 친구 삭제 로직 구현
+	send_message(TYPE_REMOVE_FRIEND, friend_name); // 서버에 친구 삭제 요청
+}
+
 // 친구 프로필 윈도우 생성 함수 예시 (실제로는 직접 구현 필요)
 void on_friend_button_clicked(GtkWidget* widget, gpointer data) {
-	const char* friend_name = (const char*)data;
-	printf("Open profile for friend: %s\n", friend_name);
-	// 친구 프로필 윈도우 생성 로직 (예: 새 창 띄우기, 친구 이름 전달 등)
-    // 서버에 친구 목록 요청
-	send_message(TYPE_FRIENDS, "");
-	// 예시: printf("Open profile for friend: %s\n", friend_name);
-	// 실제로는 GtkWindow를 생성하고, friend_name을 활용하는 코드 작성
+    const char* friend_name = (const char*)data;
+
+    // 다이얼로그(팝업) 생성
+    GtkWidget* dialog = gtk_dialog_new();
+    gtk_window_set_title(GTK_WINDOW(dialog), "친구 프로필");
+    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+
+    // 메인 컨텐츠 영역 가져오기
+    GtkWidget* content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+
+    // 프로필 이미지 (기본 아이콘 사용)
+    GtkWidget* image = gtk_image_new_from_icon_name("avatar-default", GTK_ICON_SIZE_DIALOG);
+    gtk_box_pack_start(GTK_BOX(content_area), image, FALSE, FALSE, 5);
+
+    // 친구 이름 라벨
+    GtkWidget* name_label = gtk_label_new(friend_name);
+    gtk_box_pack_start(GTK_BOX(content_area), name_label, FALSE, FALSE, 5);
+
+    // 버튼 박스 생성
+    GtkWidget* button_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+
+    // Start Chat 버튼
+    GtkWidget* chat_button = gtk_button_new_with_label("Start Chat");
+    g_signal_connect(chat_button, "clicked", G_CALLBACK(on_start_chat_clicked), (gpointer)friend_name);
+    gtk_box_pack_start(GTK_BOX(button_box), chat_button, TRUE, TRUE, 5);
+
+    // Remove Friend 버튼
+    GtkWidget* remove_button = gtk_button_new_with_label("Remove Friend");
+    g_signal_connect(remove_button, "clicked", G_CALLBACK(on_remove_friend_clicked), (gpointer)friend_name);
+    gtk_box_pack_start(GTK_BOX(button_box), remove_button, TRUE, TRUE, 5);
+
+    // 버튼 박스 추가
+    gtk_box_pack_start(GTK_BOX(content_area), button_box, FALSE, FALSE, 5);
+
+    gtk_widget_show_all(dialog);
 }
 
 // 채팅방 윈도우 생성 함수 예시 (실제로는 직접 구현 필요)
@@ -334,6 +378,268 @@ GtkWidget* create_bottom_bar(GtkWidget* window) {
     return bar;
 }
 
+void on_create_vote_response(GtkDialog* dialog, gint response_id, gpointer user_data) {
+    if (response_id == 1) { // Create
+        // 입력값 추출 및 유효성 검사
+        // send_create_vote_to_server(title, options, anonymity, duplicate);
+    }
+    gtk_widget_destroy(GTK_WIDGET(dialog));
+}
+
+void on_vote_dialog_response(GtkDialog* dialog, gint response_id, gpointer user_data) {
+    if (response_id == 1) { // Create New Vote
+        GtkWidget* create_dialog = gtk_dialog_new_with_buttons(
+            "투표 생성",
+            GTK_WINDOW(dialog),
+            GTK_DIALOG_MODAL,
+            "Create", 1,
+            "Cancel", GTK_RESPONSE_CANCEL,
+            NULL
+        );
+        GtkWidget* content_area = gtk_dialog_get_content_area(GTK_DIALOG(create_dialog));
+
+        // 제목 입력
+        GtkWidget* title_entry = gtk_entry_new();
+        gtk_entry_set_placeholder_text(GTK_ENTRY(title_entry), "Title");
+        gtk_box_pack_start(GTK_BOX(content_area), title_entry, FALSE, FALSE, 2);
+
+        // 선택지 입력 (최소 2개, 최대 10개)
+        GtkWidget* option_entries[10];
+        for (int i = 0; i < 3; ++i) {
+            option_entries[i] = gtk_entry_new();
+            gtk_entry_set_placeholder_text(GTK_ENTRY(option_entries[i]), "Option");
+            gtk_box_pack_start(GTK_BOX(content_area), option_entries[i], FALSE, FALSE, 2);
+        }
+        // + 버튼으로 선택지 추가 구현 필요
+
+
+        // 익명/중복투표 체크박스
+        GtkWidget* anonymity_check = gtk_check_button_new_with_label("Anonymity");
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(anonymity_check), TRUE);
+        gtk_box_pack_start(GTK_BOX(content_area), anonymity_check, FALSE, FALSE, 2);
+
+        GtkWidget* duplicate_check = gtk_check_button_new_with_label("Duplicate");
+        gtk_box_pack_start(GTK_BOX(content_area), duplicate_check, FALSE, FALSE, 2);
+
+        gtk_widget_show_all(create_dialog);
+
+        // Create 버튼 콜백 연결
+        g_signal_connect(create_dialog, "response", G_CALLBACK(on_create_vote_response), NULL);
+    }
+}
+
+// 투표 상세 보기 콜백
+void on_vote_detail_clicked(GtkButton* button, gpointer user_data) {
+    // 미구현
+}
+
+// 생성된 투표 보기
+void on_vote_clicked(GtkButton* button, gpointer user_data) {
+
+    GtkWidget* dialog = gtk_dialog_new_with_buttons(
+        "투표 목록",
+        NULL/*GTK_WINDOW(parent_window)*/,
+        GTK_DIALOG_MODAL,
+        "Create New Vote", 1,
+        "Close", GTK_RESPONSE_CLOSE,
+        NULL
+    );
+    GtkWidget* content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+
+    // 투표 목록 동적 생성
+    for (int i = 0; i < num_votes; ++i) {
+        if (votes[i] == NULL) continue;
+        GtkWidget* vote_btn = gtk_button_new_with_label(votes[i]->title);
+        // 각 투표 상세 보기 콜백 연결
+        g_signal_connect(vote_btn, "clicked", G_CALLBACK(on_vote_detail_clicked), votes[i]);
+        gtk_box_pack_start(GTK_BOX(content_area), vote_btn, FALSE, FALSE, 2);
+    }
+
+    gtk_widget_show_all(dialog);
+
+    // Create New Vote 버튼 처리
+    g_signal_connect_swapped(dialog, "response", G_CALLBACK(on_vote_dialog_response), dialog);
+}
+
+void update_user_list() {
+    // 기존 목록 삭제
+    GList* children = gtk_container_get_children(GTK_CONTAINER(user_list));
+    for (GList* iter = children; iter != NULL; iter = iter->next) {
+        gtk_widget_destroy(GTK_WIDGET(iter->data));
+    }
+    g_list_free(children);
+
+    // users_in_room 배열을 기반으로 라벨 추가
+    for (int i = 0; i < num_users_in_room; i++) {
+        GtkWidget* user_label = gtk_label_new(g_strdup(users_in_room[i]));
+        gtk_box_pack_start(GTK_BOX(user_list), user_label, FALSE, FALSE, 0);
+    }
+    gtk_widget_show_all(user_list);
+}
+
+// 탭 오버레이 토글 함수
+void on_tab_button_clicked(GtkButton* button, gpointer user_data) {
+    GtkWidget* tab_overlay = GTK_WIDGET(user_data);
+    gboolean visible = gtk_widget_get_visible(tab_overlay);
+    if (visible)
+        gtk_widget_hide(tab_overlay);
+    else {
+        update_user_list(); // 사용자 목록 갱신
+        gtk_widget_show(tab_overlay);
+    }
+
+	send_message(TYPE_USERS, ""); // 서버에 현재 방의 사용자 목록 요청
+}
+
+// Send 버튼 콜백
+static void on_send_clicked(gpointer data) {
+    const char* text = gtk_entry_get_text(GTK_ENTRY(entry));
+    if (text == NULL || strlen(text) == 0) return;
+
+    // 서버로 메시지 전송
+    send_message(TYPE_TEXT, text);
+
+    // 입력창 비우기
+    gtk_entry_set_text(GTK_ENTRY(entry), "");
+}
+
+// Exit 버튼 콜백
+void on_exit_clicked(GtkButton* button, gpointer user_data) {
+    send_message(TYPE_LEAVE, ""); // 서버에 방 나가기 요청
+    GtkWidget* window = GTK_WIDGET(user_data);
+    gtk_widget_destroy(window);
+}
+
+gboolean create_room_idle(gpointer data)
+{
+    const char* room_name = (const char*)data;
+    printf("[DEBUG] create_room_idle called with room_name: %s\n", room_name);
+
+    GtkWidget* window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_title(GTK_WINDOW(window), room_name);
+    gtk_window_set_default_size(GTK_WINDOW(window), 400, 600);
+
+    GtkWidget* overlay = gtk_overlay_new();
+    gtk_container_add(GTK_CONTAINER(window), overlay);
+
+    // 메인 VBox
+    GtkWidget* vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+    gtk_overlay_add_overlay(GTK_OVERLAY(overlay), vbox);
+
+    // 상단 바
+    GtkWidget* topbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_box_pack_start(GTK_BOX(vbox), topbar, FALSE, FALSE, 0);
+
+    GtkWidget* back_btn = gtk_button_new_with_label("<");
+    gtk_box_pack_start(GTK_BOX(topbar), back_btn, FALSE, FALSE, 0);
+
+    GtkWidget* tab_btn = gtk_button_new();
+    GtkWidget* tab_icon = gtk_image_new_from_icon_name("open-menu-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_button_set_image(GTK_BUTTON(tab_btn), tab_icon);
+    gtk_box_pack_end(GTK_BOX(topbar), tab_btn, FALSE, FALSE, 0);
+
+    // 채팅 메시지 영역
+    GtkWidget* scrolled = gtk_scrolled_window_new(NULL, NULL);
+    gtk_widget_set_vexpand(scrolled, TRUE);
+    gtk_box_pack_start(GTK_BOX(vbox), scrolled, TRUE, TRUE, 0);
+
+    listbox = gtk_list_box_new();
+    gtk_container_add(GTK_CONTAINER(scrolled), listbox);
+
+    // 하단 입력창 + 버튼
+    GtkWidget* hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+    gtk_box_pack_start(GTK_BOX(vbox), hbox, FALSE, FALSE, 0);
+
+    entry = gtk_entry_new();
+    gtk_box_pack_start(GTK_BOX(hbox), entry, TRUE, TRUE, 0);
+
+    GtkWidget* send_btn = gtk_button_new_with_label("Send");
+    gtk_box_pack_start(GTK_BOX(hbox), send_btn, FALSE, FALSE, 0);
+
+    // --- 탭 오버레이 화면 ---
+    GtkWidget* tab_overlay = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_size_request(tab_overlay, 400, 400);
+    gtk_widget_set_margin_top(tab_overlay, 50);
+    gtk_overlay_add_overlay(GTK_OVERLAY(overlay), tab_overlay);
+    gtk_widget_set_halign(tab_overlay, GTK_ALIGN_FILL);
+    gtk_widget_set_valign(tab_overlay, GTK_ALIGN_START);
+    gtk_widget_hide(tab_overlay);
+
+    // 좌측: 사용자 목록
+    user_list = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_size_request(user_list, 120, -1);
+    gtk_box_pack_start(GTK_BOX(tab_overlay), user_list, FALSE, FALSE, 0);
+
+    GtkWidget* user1 = gtk_label_new("Lilly");
+    GtkWidget* user2 = gtk_label_new("Marco");
+    GtkWidget* user3 = gtk_label_new("Steve");
+    gtk_box_pack_start(GTK_BOX(user_list), user1, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(user_list), user2, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(user_list), user3, FALSE, FALSE, 0);
+
+    // 우측: 메뉴 버튼
+    GtkWidget* menu_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 20);
+    gtk_box_pack_start(GTK_BOX(tab_overlay), menu_box, TRUE, TRUE, 0);
+
+    GtkWidget* invite_btn = gtk_button_new_with_label("Invite Friend");
+    GtkWidget* vote_btn = gtk_button_new_with_label("Vote");
+    GtkWidget* chess_btn = gtk_button_new_with_label("Chess Game");
+    GtkWidget* exit_btn = gtk_button_new_with_label("Exit");
+    gtk_box_pack_start(GTK_BOX(menu_box), invite_btn, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(menu_box), vote_btn, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(menu_box), chess_btn, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(menu_box), exit_btn, FALSE, FALSE, 0);
+
+    // 콜백 연결
+    g_signal_connect(tab_btn, "clicked", G_CALLBACK(on_tab_button_clicked), tab_overlay);
+    g_signal_connect(exit_btn, "clicked", G_CALLBACK(on_exit_clicked), window);
+    g_signal_connect(send_btn, "clicked", G_CALLBACK(on_send_clicked), NULL);
+
+	g_signal_connect(vote_btn, "clicked", G_CALLBACK(on_vote_clicked), NULL);
+
+    gtk_widget_show_all(window);
+    gtk_widget_hide(tab_overlay); // 시작 시 탭 화면 숨김
+}
+
+gboolean cmd_text_idle(gpointer data) {
+	char* message = (char*)data;
+	char* sender_name = strtok(message, "\n"); // 메시지에서 이름 추출
+	char* text_message = strtok(NULL, "\n"); // 메시지 내용 추출
+	printf("[DEBUG] Sender: %s , Message : %s\n", sender_name, text_message);
+
+	if (sender_name == NULL || text_message == NULL) {
+		printf("[ERROR] Invalid message format: %s\n", message);
+		// g_free(message);
+		return G_SOURCE_REMOVE; // Remove source after execution
+	}
+
+    // 메시지 행을 감쌀 박스 생성
+    GtkWidget* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+
+    // 프로필(아이콘) 생성
+    GtkWidget* profile = gtk_image_new_from_icon_name("avatar-default", GTK_ICON_SIZE_DIALOG);
+    gtk_box_pack_start(GTK_BOX(row), profile, FALSE, FALSE, 0);
+
+    // 이름+메시지 수직 박스
+    GtkWidget* vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+
+    GtkWidget* name_label = gtk_label_new(g_strdup(sender_name)); // 실제로는 패킷에서 이름 파싱 필요
+    gtk_label_set_xalign(GTK_LABEL(name_label), 0.0);
+    gtk_box_pack_start(GTK_BOX(vbox), name_label, FALSE, FALSE, 0);
+
+    GtkWidget* msg_label = gtk_label_new(g_strdup(text_message));
+    gtk_label_set_xalign(GTK_LABEL(msg_label), 0.0);
+    gtk_box_pack_start(GTK_BOX(vbox), msg_label, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(row), vbox, TRUE, TRUE, 0);
+
+    // listbox에 추가
+    gtk_list_box_insert(GTK_LIST_BOX(listbox), row, -1);
+    gtk_widget_show_all(row);
+	gtk_widget_show_all(listbox); // listbox 업데이트
+	g_free(message); // Free the message string
+}
+
 void cmd_friends(char* message) {
 	num_friends = 0; // Reset friend count
 
@@ -373,112 +679,6 @@ void cmd_add_friend(const char* message, const char* name) {
 		// show_added_friend_dialog(name);
 		return;
 	}
-}
-
-// 탭 오버레이 토글 함수
-void on_tab_button_clicked(GtkButton* button, gpointer user_data) {
-    GtkWidget* tab_overlay = GTK_WIDGET(user_data);
-    gboolean visible = gtk_widget_get_visible(tab_overlay);
-    if (visible)
-        gtk_widget_hide(tab_overlay);
-    else
-        gtk_widget_show(tab_overlay);
-}
-
-// Exit 버튼 콜백
-void on_exit_clicked(GtkButton* button, gpointer user_data) {
-	send_message(TYPE_LEAVE, ""); // 서버에 방 나가기 요청
-    GtkWidget* window = GTK_WIDGET(user_data);
-    gtk_widget_destroy(window);
-}
-
-gboolean create_room_idle(gpointer data)
-{
-	const char* room_name = (const char*)data;
-	printf("[DEBUG] create_room_idle called with room_name: %s\n", room_name);
-
-    GtkWidget* window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(window), room_name);
-    gtk_window_set_default_size(GTK_WINDOW(window), 400, 600);
-
-    GtkWidget* overlay = gtk_overlay_new();
-    gtk_container_add(GTK_CONTAINER(window), overlay);
-
-    // 메인 VBox
-    GtkWidget* vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
-    gtk_overlay_add_overlay(GTK_OVERLAY(overlay), vbox);
-
-    // 상단 바
-    GtkWidget* topbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_box_pack_start(GTK_BOX(vbox), topbar, FALSE, FALSE, 0);
-
-    GtkWidget* back_btn = gtk_button_new_with_label("<");
-    gtk_box_pack_start(GTK_BOX(topbar), back_btn, FALSE, FALSE, 0);
-
-    GtkWidget* tab_btn = gtk_button_new();
-    GtkWidget* tab_icon = gtk_image_new_from_icon_name("open-menu-symbolic", GTK_ICON_SIZE_BUTTON);
-    gtk_button_set_image(GTK_BUTTON(tab_btn), tab_icon);
-    gtk_box_pack_end(GTK_BOX(topbar), tab_btn, FALSE, FALSE, 0);
-
-    // 채팅 메시지 영역
-    GtkWidget* scrolled = gtk_scrolled_window_new(NULL, NULL);
-    gtk_widget_set_vexpand(scrolled, TRUE);
-    gtk_box_pack_start(GTK_BOX(vbox), scrolled, TRUE, TRUE, 0);
-
-    GtkWidget* listbox = gtk_list_box_new();
-    gtk_container_add(GTK_CONTAINER(scrolled), listbox);
-
-    // 하단 입력창 + 버튼
-    GtkWidget* hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
-    gtk_box_pack_start(GTK_BOX(vbox), hbox, FALSE, FALSE, 0);
-
-    GtkWidget* entry = gtk_entry_new();
-    gtk_box_pack_start(GTK_BOX(hbox), entry, TRUE, TRUE, 0);
-
-    GtkWidget* send_btn = gtk_button_new_with_label("Send");
-    gtk_box_pack_start(GTK_BOX(hbox), send_btn, FALSE, FALSE, 0);
-
-    // --- 탭 오버레이 화면 ---
-    GtkWidget* tab_overlay = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_size_request(tab_overlay, 400, 400);
-    // 탭 버튼의 높이만큼 상단 마진을 줍니다 (예: 50픽셀)
-    gtk_widget_set_margin_top(tab_overlay, 50);
-    gtk_overlay_add_overlay(GTK_OVERLAY(overlay), tab_overlay);
-    gtk_widget_set_halign(tab_overlay, GTK_ALIGN_FILL);
-    gtk_widget_set_valign(tab_overlay, GTK_ALIGN_START); // 상단 정렬로 변경
-    gtk_widget_hide(tab_overlay);
-
-    // 좌측: 사용자 목록
-    GtkWidget* user_list = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    gtk_widget_set_size_request(user_list, 120, -1);
-    gtk_box_pack_start(GTK_BOX(tab_overlay), user_list, FALSE, FALSE, 0);
-
-    GtkWidget* user1 = gtk_label_new("Lilly");
-    GtkWidget* user2 = gtk_label_new("Marco");
-    GtkWidget* user3 = gtk_label_new("Steve");
-    gtk_box_pack_start(GTK_BOX(user_list), user1, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(user_list), user2, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(user_list), user3, FALSE, FALSE, 0);
-
-    // 우측: 메뉴 버튼
-    GtkWidget* menu_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 20);
-    gtk_box_pack_start(GTK_BOX(tab_overlay), menu_box, TRUE, TRUE, 0);
-
-    GtkWidget* invite_btn = gtk_button_new_with_label("Invite Friend");
-    GtkWidget* vote_btn = gtk_button_new_with_label("Vote");
-    GtkWidget* chess_btn = gtk_button_new_with_label("Chess Game");
-    GtkWidget* exit_btn = gtk_button_new_with_label("Exit");
-    gtk_box_pack_start(GTK_BOX(menu_box), invite_btn, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(menu_box), vote_btn, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(menu_box), chess_btn, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(menu_box), exit_btn, FALSE, FALSE, 0);
-
-    // 콜백 연결
-    g_signal_connect(tab_btn, "clicked", G_CALLBACK(on_tab_button_clicked), tab_overlay);
-    g_signal_connect(exit_btn, "clicked", G_CALLBACK(on_exit_clicked), window);
-
-    gtk_widget_show_all(window);
-    gtk_widget_hide(tab_overlay); // 시작 시 탭 화면 숨김
 }
 
 // 채팅방 생성 함수
@@ -524,6 +724,31 @@ void cmd_join_room(const char* room_name) {
 	printf("[DEBUG] cmd_join_room called with room_name: %s\n", room_name);
 	// 채팅방 참여 완료 후 UI 업데이트
 	g_idle_add(create_room_idle, g_strdup(room_name));
+}
+
+// 서버로부터 입력받은 메시지를 채팅창에 추가하는 함수
+void cmd_text(const char* message) {
+	if (message == NULL || strlen(message) == 0) {
+		printf("[DEBUG] cmd_text called with empty message.\n");
+		return;
+	}
+	// 메시지를 채팅창에 추가
+	g_idle_add(cmd_text_idle, g_strdup(message));
+}
+
+// 서버로부터 채팅방 사용자 목록을 받음
+void cmd_users(char* message) {
+	num_users_in_room = 0; // Reset user count
+	// 첫 줄("Users:")은 무시하고, 이후 줄을 사용자 이름으로 저장
+	char* line = strtok(message, "\n");
+	if (line && strcmp(line, "Users:") == 0) {
+		line = strtok(NULL, "\n"); // 다음 줄로 이동
+		while (line != NULL && num_users_in_room < 20) {
+			users_in_room[num_users_in_room] = strdup(line); // 사용자 이름 복사
+			num_users_in_room++;
+			line = strtok(NULL, "\n");
+		}
+	}
 }
 
 // Thread function to receive messages from the server
@@ -574,6 +799,7 @@ static void* receive_messages(void* arg) {
         switch (header.type)
         {
         case TYPE_TEXT:
+			cmd_text(message_start); // 채팅 메시지 처리
             break;
         case TYPE_NICK:
             break;
@@ -589,6 +815,7 @@ static void* receive_messages(void* arg) {
 		case TYPE_LEAVE:
 			break;
 		case TYPE_USERS:
+			cmd_users(message_start); // 채팅방 사용자 목록 요청에 대한 서버의 응답 처리
 			break;
 		case TYPE_FRIENDS:
 			cmd_friends(message_start); // 친구 목록 요청에 대한 서버의 응답 처리
@@ -604,7 +831,13 @@ static void* receive_messages(void* arg) {
             break;
 		case TYPE_REMOVE_FRIEND: // 친구 삭제 완료에 대한 서버의 ACK
             break;
-		case TYPE_HELP:
+		case TYPE_VOTES:
+            break;
+        case TYPE_CREATE_VOTE:
+            break;
+        case TYPE_DO_VOTE:
+            break;
+		case TYPE_VOTE_RESULT:
             break;
 		case TYPE_ERROR:
 			printf("[Server] Error: %s\n", message_start);
@@ -612,8 +845,6 @@ static void* receive_messages(void* arg) {
 		default:
             break;
         }
-
-        // g_idle_add(append_message_to_view_idle, g_strdup(buffer)); // Use g_idle_add for thread safety
     }
 
     if (bytes_received == 0) {
@@ -628,7 +859,7 @@ static void* receive_messages(void* arg) {
     send_data->widget = send_button; send_data->sensitive = FALSE;
     g_idle_add(set_widget_sensitive_idle, send_data);
     WidgetSensitivityData* msg_data = g_new(WidgetSensitivityData, 1);
-    msg_data->widget = message_entry; msg_data->sensitive = FALSE;
+    msg_data->widget = entry; msg_data->sensitive = FALSE;
     g_idle_add(set_widget_sensitive_idle, msg_data);
     WidgetSensitivityData* conn_data = g_new(WidgetSensitivityData, 1);
     conn_data->widget = connect_button; conn_data->sensitive = TRUE;
@@ -734,36 +965,6 @@ static void on_enter_button_clicked(GtkWidget *widget, gpointer data) {
     }
 }
 
-// Callback for the "Send" button or pressing Enter in the message entry
-static void on_send_clicked(GtkWidget *widget, gpointer data) {
-    if (sock < 0) {
-        g_idle_add(append_message_to_view_idle, g_strdup("[Client] Not connected to server."));
-        return;
-    }
-    const char *message = gtk_entry_get_text(GTK_ENTRY(message_entry));
-    if (strlen(message) == 0) return;
-
-	//send_message(TYPE_TEXT, message);
-    //char buffer_to_send[BUFFER_SIZE];
-    //PacketHeader header;
-    //header.type = TYPE_TEXT;
-    //header.length = htons(strlen(message) + 1); // 개행 문자 포함 길이
-
-    //memcpy(buffer_to_send, &header, sizeof(PacketHeader));
-    //snprintf(buffer_to_send + sizeof(PacketHeader), BUFFER_SIZE - sizeof(PacketHeader), "%s\n", message);
-    //// 패킷 길이 디버그
-    //int packet_len = sizeof(PacketHeader) + strlen(message) + 1; // header + 메시지 + 개행
-    //printf("[DEBUG] Packet length: %d\n", packet_len);
-	
-    //// Send the message to the server
-    //if (send(sock, buffer_to_send, packet_len, 0) < 0) {
-    //    perror("send");
-    //    g_idle_add(append_message_to_view_idle, g_strdup("[Client] Error: Failed to send message."));
-    //}
-    gtk_entry_set_text(GTK_ENTRY(message_entry), "");
-    gtk_widget_grab_focus(message_entry);
-}
-
 // Window destroy callback (cleanup)
 static void on_window_destroy(GtkWidget *widget, gpointer data) {
     if (sock != -1) {
@@ -810,27 +1011,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
     connect_button = gtk_button_new_with_label("Enter");
     g_signal_connect(connect_button, "clicked", G_CALLBACK(on_enter_button_clicked), NULL);
     gtk_grid_attach(GTK_GRID(grid), connect_button, 2, 3, 1, 1);
-
-    /*scrolled_window = gtk_scrolled_window_new(NULL, NULL);
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled_window), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC); // Add scrollbars
-    gtk_widget_set_vexpand(scrolled_window, TRUE);
-    chat_view = gtk_text_view_new();
-    gtk_text_view_set_editable(GTK_TEXT_VIEW(chat_view), FALSE);
-    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(chat_view), FALSE);
-    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(chat_view), GTK_WRAP_WORD_CHAR);
-    gtk_container_add(GTK_CONTAINER(scrolled_window), chat_view);
-    gtk_grid_attach(GTK_GRID(grid), scrolled_window, 0, 1, 5, 1); // Row 1, Col 0, spans 5 columns
-
-    message_entry = gtk_entry_new();
-    gtk_widget_set_hexpand(message_entry, TRUE);
-    g_signal_connect(message_entry, "activate", G_CALLBACK(on_send_clicked), NULL);
-    gtk_grid_attach(GTK_GRID(grid), message_entry, 0, 2, 4, 1); // Row 2, Col 0, spans 4 columns
-    gtk_widget_set_sensitive(message_entry, FALSE);
-
-    send_button = gtk_button_new_with_label("Send");
-    g_signal_connect(send_button, "clicked", G_CALLBACK(on_send_clicked), NULL);
-    gtk_grid_attach(GTK_GRID(grid), send_button, 4, 2, 1, 1); // Row 2, Col 4
-    gtk_widget_set_sensitive(send_button, FALSE);*/
 
     gtk_widget_show_all(window);
 }
